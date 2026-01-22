@@ -1,1 +1,226 @@
 #This file described the R code ran to generate the figures for "Characterizing the Insertion Site Preference of Mu Transposable Elements Across Maize Tissues
+
+
+load("MuCounts.rda")
+load("Locs.rda")
+load("Hotspots2.rda")
+load("HScounts.rda")
+load("zygotics.rda")
+load("Maize Tissue Atlas _ remappedV5-1.rda")
+
+library(rtracklayer)
+library(GenomicFeatures)
+library(GenomicRanges)
+library(ComplexHeatmap)
+library(ggplot2)
+library(tidyverse)
+library(BSgenome)
+library(seqLogo)
+
+###Figure Making Below###
+##Figure1##
+makeFig1Heatmap = function(chr, start, width = 500, binsize = 1, maxenr = 500, EffGenomeSize = 2182075994) {
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
+  bindata = t(apply(cbind(MuCounts[datasub,c(2:3, 18:19, 24:25, 42:45)]), 2, function(xx) {
+    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
+    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
+    bincounts[is.na(bincounts)] = 0
+    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
+    bincounts
+  }))
+  
+  Heatmap(bindata, col=colorRampPalette(c("grey", "black"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
+}
+svg("Figure1B")
+makeFig1Heatmap(chr="chr7", start=13584500)
+dev.off()
+
+#figure 1C
+coords = do.call(rbind, strsplit(rownames(MuCounts), "[:,]"))
+coords = as.data.frame(coords, stringsAsFactors = FALSE)
+colnames(coords) = c("chr", "pos1", "pos2")
+coords$pos = apply(coords[, 2:3], 1, function(x)
+  round(mean(as.numeric(x), na.rm = TRUE))
+)
+GenomeSequence = readDNAStringSet("~/Desktop/Coding/Genomes/Zm-B73-REFERENCE-NAM-5.0.fa.gz")
+seqlens = width(GenomeSequence)
+gr <- GRanges(
+  seqnames = coords$chr,
+  ranges   = IRanges(
+    start = coords$pos - 15,
+    end   = coords$pos + 14
+  )
+)
+seqs <- getSeq(GenomeSequence, gr)
+setdiff(unique(coords$chr), names(GenomeSequence))
+mat <- consensusMatrix(seqs, as.prob = TRUE)[c("A","C","G","T"), ]
+svg("Fig1C.svg")
+seqLogo(mat[, 9:23],yaxis = 1)
+dev.off()
+
+##Figure 2##
+#figure 2 main
+makeHeatmap = function( chr, start, width = 100000, binsize = 500, maxenr = 500, EffGenomeSize = 2182075994) {
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
+  bindata = t(apply(cbind(MuCounts[datasub,]), 2, function(xx) {
+    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
+    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
+    bincounts[is.na(bincounts)] = 0
+    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
+    bincounts
+  }))
+  bindata = sweep(bindata, 1, colSums(MuCounts) > 0*binsize/EffGenomeSize, '/')  # Scale to fold-enrichment
+  bindata[bindata > maxenr] = maxenr  # Scale everything beyond cutoff so that color palette is not dominated by rare extreme bins (which are mostly from low-depth samples)
+  Heatmap(bindata, col=colorRampPalette(c("grey", "red"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
+}
+svg("Figure2A.svg")
+makeHeatmap(chr='chr7',start=2000000, width=100000) #endosperm enriched hotspot
+dev.off()
+
+#figure 2 top
+start=2000000
+width=100000
+chr="chr7"
+binsize=500
+EffGenomeSize = 2182075994
+maxenr=500
+datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
+bindataUn = t(apply(MuCounts, 2, function(xx) {
+  bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
+  bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
+  bincounts[is.na(bincounts)] = 0
+  names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
+  bincounts
+}))
+normFact = colSums(MuCounts > 0)*binsize/EffGenomeSize
+bindata = sweep(bindataUn, 1, normFact, '/')  # Scale to fold-enrichment
+bindata[bindata > maxenr] = maxenr  # Scale everything beyond cutoff so that color palette is not dominated by rare extreme bins (which are mostly from low-depth samples)
+bootsMat2 = function(i, D) {
+  bootsamp = sample(1:nrow(D), replace = T)
+  colSums(D[bootsamp,])
+}
+bootsN2 = t(sapply(1:2000, bootsMat2, D = bindataUn))
+#calc the mean, and sd, use this to make 95% CI
+mean=as.data.frame(colMeans(bootsN2)) # bootstrap mean across genome window
+sd=apply(bootsN2, 2, sd) # SEM across window
+CI=apply(bootsN2, 2, quantile, p = c(.025,.975))  # CI95
+lci=as.data.frame(CI[1,])
+uci=as.data.frame(CI[2,])
+#plot the line plot with the 95% CI
+svg("Fig2B_1-21-26.svg")
+ggplot(mean, aes(x=1:nrow(mean),y=colMeans(bootsN2), ymin=lci$`CI[1, ]`,ymax=uci$`CI[2, ]`))+geom_line(colour="black")+theme_classic()+geom_ribbon(aes(colour=NA))+theme_classic()
+dev.off()
+
+##figure 3
+#figure 3A
+HScpm = sweep(HScounts[-1,], 2, colSums(HScounts), '/')*10^6  # Scale hotspot counts to insertions per million
+HScpmScaled = log(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] + 10)  #Remove hotspots that contain any zygotic insertions (they are dominated by lineage signal) require at least 10K insertions in a sample, then log transform after adding a pseudocount of 10
+D = HScpmScaled
+D2 = D[rowSums(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] >= 50) >= 3,]
+
+tissue = gsub('[0-9]', '', colnames(D))
+tissue = gsub("D-_",'', tissue)
+tissueMeans = matrix(NA, nrow = nrow(D2), ncol = length(unique(tissue)))
+colnames(tissueMeans) = unique(tissue)
+
+for (z in unique(tissue)) { tissueMeans[,z] = rowMeans(D2[,tissue == z]) }
+
+var_exp = rowSums(sweep(sweep(tissueMeans, 1, rowMeans(D2), '-')^2, 2, table(tissue)[colnames(tissueMeans)], '*'))/(ncol(tissueMeans) - 1)
+var_unexp = rowSums((D2 - tissueMeans[,tissue])^2)/(ncol(D2) - ncol(tissueMeans))
+Ft = var_exp/var_unexp
+
+set.seed(3)
+#for maintext fig
+mat = t(scale(t(D2[rank(-Ft) <=200,])))  # 1558 note: to make fig 3, use the top 200 instead of 1545
+hm = draw(Heatmap(mat, clustering_method_rows = 'ward.D2',row_dend_reorder = T, row_split = 15, show_row_names = F, show_row_dend = T, show_column_dend = F,column_km = 4 ,col = colorRampPalette(c('#0571b0','#92c5de','#f7f7f7','#f4a582','#ca0020'))(100)))
+svg('TAHotSpotsFig3.svg', width = 4.5, height = 8)
+hm
+dev.off()
+clusters = row_order(hm)
+names(clusters) = c("EndospermandRootEnriched1",
+                    "EndospermandRootEnriched2",
+                    "LeafDepleted1",
+                    "EndospermandLeafEnriched1",
+                    "EndospermEnriched1",
+                    "PollenDepleted1",
+                    "LeafandEndospermEnriched2",
+                    "PollenDepleted2",
+                    "RootDepleted1",
+                    "LeafEnriched",
+                    "LeafandRootEnriched1",
+                    "RootDepleted2",
+                    "PollenEnriched1",
+                    "EndospermDepleted1",
+                    "EndospermDepleted2")
+
+#Fig 3B&C, plus supplemental examples: 
+makeBrowser = function(chr, start, end, width = 10000, EffGenomeSize = 2182075994, WindowSize=500, lengthfudge = 0) {
+  startat = (round((mean(c(start,end)) - width/2)/500)*500) + lengthfudge
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= startat) & (Locs[,2] <= (startat + width))))
+  dat=MuCounts
+  dat1=matrix(data=NA, ncol = 4, nrow=nrow(MuCounts))
+  colnames(dat1)=c("Endosperm","Root","Leaf","Pollen")
+  Leaf=rowSums(dat[,grepl("L",colnames(dat))])
+  Root=rowSums(dat[,grepl("R",colnames(dat))])
+  Pollen=rowSums(dat[,grepl("P",colnames(dat))])
+  Endosperm=rowSums(dat[,grepl("E",colnames(dat))])
+  dat1=cbind(Endosperm, Root, Leaf, Pollen)
+  lambda = colSums(dat1 > 0)*WindowSize/EffGenomeSize
+  dat1=dat1[datasub,]
+  dat1=as.data.frame(dat1)
+  position=as.numeric(sub('.+,','',rownames(dat1)))
+  dat1$position = position
+  mat = apply(dat1[,1:4], 2, function(yy) { sapply(startat:(startat+width), function(xx) { sum(abs(dat1$position[yy > 0] - xx) <= WindowSize/2) }) })
+  mat = sweep(mat, 2, lambda, '/')
+  
+  cols=c('#67536cff','#a05a2cff','#73b47cec','#ffd42aff')
+  Tissue=c("Endosperm","Root",'Leaf',"Pollen")
+  par(mfrow=c(4,1))
+  par(mar=c(1.25, 4.1, 0.5, 2.1))
+  for (i in 1:4){
+    bp=barplot(mat[,i], border = NA, space = 0, col = cols[i], xaxs = 'i', ylim = c(0,ceiling(max(mat)/50)*50), axisnames = F, main=Tissue[i], axes = F)
+    axis(1, at=bp[c(1,nrow(bp)),1],labels =NA, tick = T, lwd = .5)
+    axis(2, at=c(0,ceiling(max(mat)/50)*50),tick = T, las = 2, lwd = .5)
+  }
+  abline(v=bp[start-startat,])
+  abline(v=bp[end-startat,])
+  axis(1, at=c(bp[1,], bp[nrow(bp),]), labels=c(startat, startat+width), lwd=.5)
+}
+
+svg("PollenEnrichedHotSpotsilky1.svg")
+makeBrowser(chr='chr6',start = 94460776, end=94459638, width = 7500, WindowSize = 1000) #silky1 pollen enriched 
+dev.off()
+
+svg("LeafEnrichedHotSpot.svg",width = 4, height=3)
+makeBrowser(chr='chr3', start=201403390, end=201405771, width=5000, WindowSize =1000 ) ##leaf Enriched+++
+dev.off()
+svg("EndospermEnrichedHotSpot.svg", width=4, height=3)
+makeBrowser(chr='chr2', start=174151835, end=174153141, width=5000, WindowSize = 1000) #endo enriched +++
+dev.off()
+svg("RootEnrichedHotSpot.svg", width=4, height=3)
+makeBrowser(chr='chr9',start =58111102, end = 58112591, width = 5000, WindowSize = 1000 ) #Strong root enriched hotspot +++
+dev.off()
+
+makeBrowser(chr='chr3',start =163836402, end = 163832719, width = 10000, WindowSize = 1000 ) #Strong pollen depleted
+
+##Figure 4
+
+
+
+
+
+
+
+
+##supplemental figs 
+HScpm = sweep(HScounts[-1,], 2, colSums(HScounts), '/')*10^6  # Scale hotspot counts to insertions per million
+HScpmScaled = log(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] + 10)  #Remove hotspots that contain any zygotic insertions (they are dominated by lineage signal) require at least 10K insertions in a sample, then log transform after adding a pseudocount of 10
+cors = cor(HScpmScaled[rank(-apply(HScpmScaled,1,sd)) %in% 1:2000,])  # Consider correlation between 2000 most-variable hotspots
+diag(cors) = NA
+svg('Tissue correlation heatmap_1-20-26.svg', width = 5, height = 5)
+Heatmap(cors, clustering_method_rows = 'ward.D2', clustering_method_columns = 'ward.D2',col = colorRampPalette(c('#0571B0','#92C5DE','#F7F7F7','#F4A582','#CA0020'))(50))
+dev.off()
+
+
+
+
