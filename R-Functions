@@ -301,7 +301,11 @@ makeHeatmapTop = function(i, width = 40000) {
   makeHeatmap(HotSpots2[i,1], round(HotSpots2[i,2] - width/2), width)
 }
 #Function for Making Null hotspots for FDR correction
-library(parallel)
+library(parallel
+set.seed(1))
+Locs_base <- Locs[, 1:2]
+n_iter <- 1000
+HSnull <- vector("list", n_iter)
 n_cores = 28
 HSnull = mclapply(
   X = seq_len(n_iter),
