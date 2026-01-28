@@ -1,1 +1,84 @@
 #This file is for describing the code ran to generate MuCounts.rda, Locs.rda, and Hotspots.rda, as well as analysis associated with these R objects. 
+#Functions required are available in file "R-Functions"
+#create constants
+EffectiveGenomeSize=2182075994 #calculated using genmap, this is the effective genome size for B73 V5
+
+##load in packages
+library(ComplexHeatmap)
+
+##load in R objects
+load("HotSpotsCleanData.rda") #this object was generated from file "Data-processing-1-Read-Filtering-and-Molecule-Counting"
+
+###Generate MuCounts object from HotSpotsCleanData object
+#Process data by requiring 5 reads per UMI, remove molecules with "N" in their UMI, and run MergeFn 
+CleanData2 = lapply(HotSpotsCleanData, function(xx) { xx[xx$Reads >= mean(xx$Reads)/5,] })
+CleanData2 = lapply(CleanData2, function(xx) { xx[!grepl('N', xx$UMI),] }) #removes any reads thats UMI includes an "N"
+MoleculeCounts = MergeFn(CleanData2)  # Merge CleanData list into a matrix of Mu TIR counts
+rm(CleanData2, CleanData)
+
+MuCounts2 = MuCountFn(MoleculeCounts)  # Connect both TIRs and convert to matrix of Mu Insertion Counts
+MuCounts3 = MuStagger(MuCounts2)  # Connect TIRs with shift from 9 bp TSD... this primarily affects inherited counts for small number of paternal insertions
+nrow(MuCounts3[[1]]) - nrow(MuCounts2[[1]])  # 104 insertion sites were affected by the 'MuStagger' function (out of ~3.8 million)
+MuCounts = adjCounts(MuCounts3, thresh = 1, pseudo = 500)  # For Mu insertions where there was a large discrepancy between the left and right borders, estimate MuCounts based on only the better-sampled border. This affects 258 insertions (0.00013% of total)
+rm(MoleculeCounts, MuCounts2, MuCounts3)
+
+keeps = rowSums(MuCounts[[1]]) > 0
+MuCounts = lapply(MuCounts, function(xx) { xx[keeps,] })
+MuCounts=poolTechReps(MuCounts)
+MuCounts=MuCounts[[1]] #removes the second and third object from the MuCounts list, not needed for the analysis
+
+#filter inherited insertions from MuCounts
+MuCountsCPM=sweep(MuCounts,2,colSums(MuCounts),"/")*10^6 #normalize by library depth to better identify the inherited insertions from the dataset
+plant = gsub('[a-z]', '', colnames(MuCounts), ignore.case=T)
+plant=gsub(".+-","",plant)
+plant=gsub("_","",plant)
+samps = unique(plant[grepl('E', colnames(MuCounts))])
+FindShared = MuCountsCPM[,plant %in% samps]
+plant = plant[plant %in% samps]
+paternals=list()
+historicals = rowMeans(MuCountsCPM[,grepl('MI', colnames(MuCountsCPM))] >= 1000) == 1
+for (s in samps) {
+  X2 = FindShared[,plant == s] >= 1000
+  X2=as.data.frame(X2)
+  if (ncol(X2) == 2) {
+    paternals[[s]] = (rowMeans(X2) == 1) & !historicals}
+  
+  if (ncol(X2)>2) {
+    paternals[[s]] = X2[,grepl('E', colnames(X2))] & (rowSums(X2[,!grepl('E', colnames(X2))]) >= 1) & !historicals
+    
+  }
+}
+AllInherited=gsub(".+c","c",names(which(unlist(paternals))>0)) #takes the list made from the above loop and identifies the positions of all inherited insertions across our dataset. 
+MuCounts=MuCounts[!rownames(MuCounts)%in%AllInherited,] #removed 916 unique sites from the matrix that were inherited (>1000 CPM insertions in endo and matched tissue)
+historicals=historicals[historicals>0] #find the true statements for historical insertion sites, as these are the histroical insertion sites
+MuCounts=MuCounts[!rownames(MuCounts)%in%names(historicals),] #remove the rows from MuCounts that are historical, inherited insertions 
+save(MuCounts, file = 'MuCounts.rda')
+
+##Make Locs object from MuCounts object
+Locs = t(matrix(unlist(strsplit(rownames(MuCounts),':')), nrow = 2))
+Locs1=strsplit(Locs[,2],",")
+Locs1=lapply(Locs1, function(X){round(mean(as.numeric(X)))}) #taking the average of LB RB 
+Locs = data.frame(chr = Locs[,1], position = unlist(Locs1))
+Locs$bin = paste(Locs$chr, round(Locs$pos/2000), sep = ',')
+save(Locs, file="Locs.rda")
+
+#make HotSpots from Locs object, trim and process
+HotSpots = FindHotSpots(Locs)  # Identify Mu hotspots using overall insertion locations
+HotSpots$size = apply(HotSpots[,2:3], 1, diff) + 1 #add size of hotspot column to dataframe
+
+##add tissue information to initial called hotspots
+HScounts = matrix2bincounts(MuCounts) #count the number of insertions detected from each sample for each hotspot
+zygotics = matrix2bincounts(MuCounts >= 500)  # Identifies which hotspots have insertions contributed to by early, abundant Mu insertions
+zygotics = which(rowSums(zygotics[-1,]) > 0) #identifies hotspots that are contributed to by early Mu insertions, which add unwanted signal for samples from the same individual
+HScpm = sweep(HScounts[-1,], 2, colSums(HScounts), '/')*10^6  # Scale hotspot counts to insertions per million
+HScpmScaled = log(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] + 10)  #Remove hotspots that contain any zygotic insertions (they are dominated by lineage signal) require at least 10K insertions in a sample, then log transform after adding a pseudocount of 10
+save(HScpmScaled, file="HScpmScaled.rda")
+
+
+HSCPMScaledandFiltered = HScpmScaled[rowSums(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] >= 50) >= 3,] #keeps only hotspots that arent zygotic and that have >=50 cpm in 3 samples that have >=10000 cpm 
+
+
+
+
+
+
