@@ -1,0 +1,318 @@
+#This script is for the functions needed for the analysis associated with "Characterizing the Insertion Site Preference of Mu Transposable Elements Across Maize Tissues"
+
+MergeFn = function(A, MoleculeCounting = T) {  # Function to merge CleanData list into a matrix of Mu TIR counts
+  if (MoleculeCounting) {
+    MergingData = lapply(A, function(A2) { table(paste(A2$Chromosome, A2$Position, A2$Direction)) })
+  } else {
+    MergingData = lapply(A, function(A2) { by(A2$Reads, paste(A2$Chromosome, A2$Position, A2$Direction), sum) })
+  }
+  
+  allLocations = unique(unlist(lapply(MergingData, names)))
+  XX = matrix(unlist(lapply(MergingData, function(x) { x[allLocations] })), ncol = length(MergingData))
+  rownames(XX) = allLocations
+  colnames(XX) = names(MergingData)
+  XX[is.na(XX)] = 0
+  return(XX)
+}
+
+MuCountFn = function(A) {  # Function to connect reads out of both transposon direction, converting Mu TIR counts to Mu insertion counts
+  gLocs = t(matrix(unlist(strsplit(rownames(A), ' ')), nrow=3))
+  gLocs = data.frame(Chr = gLocs[,1], Pos = as.numeric(gLocs[,2]), Dir = gLocs[,3])
+  gLocs$MuCenter = paste(gLocs[,1], gLocs[,2] + 4*as.numeric(gLocs[,3]), sep=',')
+  
+  MuCountsRB = matrix(0, nrow = length(unique(gLocs$MuCenter)), ncol = ncol(A))
+  rownames(MuCountsRB) = unique(gLocs$MuCenter)
+  colnames(MuCountsRB) = colnames(A)
+  MuCountsLB = MuCountsRB
+  
+  MuCountsRB[gLocs$MuCenter[gLocs$Dir == '1'],] = A[gLocs$Dir == '1',]
+  MuCountsLB[gLocs$MuCenter[gLocs$Dir == '-1'],] = A[gLocs$Dir == '-1',]
+  
+  
+  # By default, TIR borders on both sides of a Mu element are connected assuming they will map 9 bp apart -- this is true for non-reference elements given the 9 bp target site duplication; the following code connects both sides of an element for insertions that are present in the reference genome
+  MU = read.table("~/Library/CloudStorage/OneDrive-UniversityofGeorgia/JustinScherer/B73Blast12-6-23.out", sep = '\t', comment ='#')
+  MU = MU[MU[,7] == 1,]
+  MU$ID = paste(MU[,2], MU[,9] + sign(MU[,9] - MU[,10]), sign(MU[,9] - MU[,10]), sep = ',')
+  MU = MU[order(MU[,2], MU[,9]),-1]
+  MU$ID2 = paste(MU[,1], MU[,8] + 5*sign(MU[,8] - MU[,9]), sep = ',')
+  
+  MU2 = MU[MU[,7] >= 65,]
+  MU2$Pair = NA
+  PR = which(abs(diff(c(0, MU2[, 8]))) < 10000)
+  MU2$Pair[PR] = MU2$ID2[PR - 1]
+  
+  MU2 = rbind(MU2[1,],MU2)
+  MU2$ID2[1] = 'chr3,122342449'
+  MU2$Pair[1] = 'chr3,122342376'
+  
+  swaps = !is.na(MU2$Pair) & (MU2$ID2 %in% rownames(MuCountsRB)) & (MU2$Pair %in% rownames(MuCountsRB))
+  MuCountsRB[MU2[swaps,]$Pair,] = MuCountsRB[MU2[swaps,]$ID2,]
+  MuCountsRB = MuCountsRB[!(rownames(MuCountsRB) %in% MU2[swaps,]$ID2),]
+  rownames(MuCountsRB)[match(MU2[swaps,]$Pair, rownames(MuCountsRB))] = MU2[swaps,]$ID2
+  MuCountsLB = MuCountsLB[!(rownames(MuCountsLB) %in% MU2[swaps,]$ID2),]
+  
+  gLocs2 = data.frame(Chr = sub(',.+', '', rownames(MuCountsRB)), PosL = as.numeric(sub('.+,', '', rownames(MuCountsLB))) + 4, PosR = as.numeric(sub('.+,', '', rownames(MuCountsRB))) - 4)
+  
+  MuCountsAll = MuCountsLB + MuCountsRB
+  rownames(MuCountsAll) = gsub(' ', '', paste(apply(gLocs2[,1:2],1,paste,collapse=':'),gLocs2[,3],sep=','))
+  rownames(MuCountsLB) = gsub(' ', '', apply(gLocs2[,1:2],1,paste,collapse=':'))
+  rownames(MuCountsRB) = gsub(' ', '', apply(gLocs2[,c(1,3)],1,paste,collapse=':'))
+  
+  return(list(MuCountsAll = MuCountsAll, MuCountsRB = MuCountsRB, MuCountsLB = MuCountsLB))
+}
+
+
+MuStagger = function(X, thresh = 50, distthresh = 15) { #connects Mu TIRs that are not separated by the typical 9bp TSD
+  Locs = t(matrix(unlist(strsplit(sub(':',',',rownames(X[[1]])),',')), nrow = 3))
+  Locs = data.frame(chr = Locs[,1], position = as.numeric(Locs[,2]), position2 = as.numeric(Locs[,3]))
+  ords = order(Locs[,1], Locs[,2], Locs[,3])
+  X[[1]] = X[[1]][ords,]
+  X[[2]] = X[[2]][ords,]
+  X[[3]] = X[[3]][ords,]
+  Locs = Locs[ords,]
+  
+  mergedists = list()
+  merges = NULL
+  for (i in 1:ncol(X[[1]])) {
+    flagRBi = which((X[[2]][,i] > X[[3]][,i]*thresh) & (X[[2]][,i] >= thresh))
+    flagLBi = which((X[[2]][,i]*thresh < X[[3]][,i]) & (X[[3]][,i] >= thresh))
+    xi = Locs[flagLBi,2]
+    checks = sapply(Locs[flagRBi,2], function(xx) { xx - xi })
+    xi = X[[3]][,i][flagLBi]
+    sums = sapply(X[[2]][,i][flagRBi], function(xx) { xx + xi })
+    
+    
+    if (is.null(dim(checks))) { mergedists[[colnames(X[[1]])[i]]] = integer(0) } else {
+      sums[abs(checks) > distthresh] = NA
+      checks[abs(checks) > distthresh] = NA
+      
+      if (all(is.na(checks))) { mergedists[[colnames(X[[1]])[i]]] = integer(0) } else {
+        
+        # when there are multiple LR-border pairs that qualify, match the two with the highest Mu counts in a sample
+        sumsMax = sweep(!is.na(sums), 1, apply(sums,1,max,na.rm=T), '*')
+        sumsMax = sweep(sumsMax > 0, 2, apply(sumsMax,2,max,na.rm=T), '*')
+        sumsMax = sumsMax*(sums > 0)
+        checks[sums < sumsMax] = NA
+        
+        mergedists[[colnames(X[[1]])[i]]] = table(checks)
+        
+        flagRBi = flagRBi[colSums(!is.na(checks)) > 0]
+        checks = checks[,colSums(!is.na(checks)) > 0]
+        if (is.null(dim(checks))) {
+          flagLRi = cbind(flagRBi, flagLBi[which(!is.na(checks))],i)
+        } else {
+          flagLRi = cbind(flagRBi, flagLBi[apply(!is.na(checks), 2, which)],i)
+        }
+        
+        merges = rbind(merges,flagLRi)
+      }}}
+  merges = as.matrix(merges)
+  
+  merges2 = unique(merges[,1:2])
+  merges2 = cbind(merges2, as.numeric(table(merges[,2])[as.character(merges2[,2])]))
+  
+  mergesName = cbind(rownames(X[[2]][merges2[,1],]), rownames(X[[3]][merges2[,2],]))
+  for (dups in unique(mergesName[duplicated(mergesName[,1]),1])) {
+    dups = which(mergesName[,1] == dups)
+    swaps = which(merges2[dups,3] == max(merges2[dups,3]))[1]
+    mergesName[dups[-swaps],2] = mergesName[dups[swaps],2]
+  }
+  mergesName = cbind(paste(mergesName[,2], sub('ch.+:','',mergesName[,1]),sep=','), mergesName)
+  
+  for (i in nrow(merges2)) {
+    X[[1]][merges2[i,1],] = X[[1]][merges2[i,1],] + X[[1]][merges2[i,2],]
+    X[[2]][merges2[i,1],] = X[[2]][merges2[i,1],] + X[[2]][merges2[i,2],]
+    X[[3]][merges2[i,1],] = X[[3]][merges2[i,1],] + X[[3]][merges2[i,2],]
+  }
+  rownames(X[[1]])[merges2[!duplicated(merges2[,1]),1]] = mergesName[!duplicated(merges2[,1]),1]
+  rownames(X[[2]])[merges2[!duplicated(merges2[,1]),1]] = mergesName[!duplicated(merges2[,1]),2]
+  rownames(X[[3]])[merges2[!duplicated(merges2[,1]),1]] = mergesName[!duplicated(merges2[,1]),3]
+  X[[1]] = X[[1]][-merges2[,2],]
+  X[[2]] = X[[2]][-merges2[,2],]
+  X[[3]] = X[[3]][-merges2[,2],]
+  
+  print(table(unlist(lapply(mergedists, length))))
+  bp = barplot(rowSums(matrix(unlist(lapply(mergedists, function(xx) { xx[as.character(-distthresh:distthresh)] })), nrow=distthresh*2+1), na.rm=T), border = NA, col = 'dark gray')
+  axis(1, at = bp[seq(1,distthresh*2+1,5),1], labels = seq(-distthresh,distthresh,5))
+  return(X)
+}
+
+
+adjCounts = function(X, thresh = 2, pseudo = 20) { #
+  filter = abs(log(rowSums(X[[2]]) + pseudo, 2) - log(rowSums(X[[3]]) + pseudo, 2)) > thresh
+  cat(sum(filter), 'insertions estimated from only one border', sum(filter)/length(filter), '% of total\n')
+  X[[1]][filter,] = abs(X[[2]][filter,] - X[[3]][filter,]) + (X[[2]][filter,] + X[[3]][filter,])
+  return(X)
+}
+
+
+poolTechReps = function(X) { #pools technical replicates
+  samps = sub(',T$', '', colnames(X[[1]]))
+  repsamps = unique(samps[duplicated(samps)])
+  lapply(X, function(xx) {
+    xx[,repsamps] = xx[,repsamps] + xx[,paste(repsamps,'T',sep=',')]
+    xx = xx[,!(colnames(xx) %in% paste(repsamps,'T',sep=','))]
+    return(xx) })
+}
+
+filteredCounts = function(X, thresh = 2, pseudo = 20) {
+  filter = abs(log(rowSums(X[[2]]) + pseudo, 2) - log(rowSums(X[[3]]) + pseudo, 2)) <= thresh
+  cat(sum(!filter), 'insertions filtered', sum(!filter)/length(filter), '% of total\n')
+  return(X[[1]][filter,])
+}
+
+
+assign2bins = function(dat, bins) { #used to call hotspots, assigns insertion locations to bins
+  binborders = c(bins$start, bins$end)
+  binborders = binborders[order(binborders)]
+  assigned_bins = cut(dat, c(0,binborders,Inf), labels = c(rbind('none', rownames(bins))[1:(2*nrow(bins))], 'none'))
+  return(assigned_bins)
+}
+
+matrix2bincounts = function(mat, locations = Locs, hs = HotSpots) { #counts the number of insertions from each sample in each hotspot
+  mat = apply(mat, 2, function(xx) { (xx > 0)*locations$position })
+  mat2 = mat
+  for (chr in unique(hs$chr)) {
+    mat2[locations$chr == chr,] = apply(mat[locations$chr == chr,], 2, assign2bins, bins = hs[hs$chr == chr,])
+  }
+  mat3 = apply(mat2, 2, function(xx) { table(xx)[c('none',rownames(hs))] })
+  mat3[is.na(mat3)] = 0
+  rownames(mat3) = c('none',rownames(hs))
+  return(mat3)
+}
+
+FindHotSpots = function(locations = Locs, WindowSize = 500, EffGenomeSize = 2182075994) { #function for identifying Mu hotspots across the genome
+  out = NULL
+  Lambda=nrow(Locs)*WindowSize/EffGenomeSize
+  Threshold = qpois(10^-5, Lambda, lower.tail=F)
+  
+  for (chr in unique(locations$chr)) {
+    xx = locations$position[locations$chr == chr]
+    
+    BinnedLocs = NULL
+    for (offset in 0:(WindowSize-1)) {
+      BinnedLocs = c(BinnedLocs, floor((xx - offset)/WindowSize)*WindowSize + offset)
+    }
+    BinnedLocs = table(BinnedLocs)
+    SigBins = BinnedLocs[BinnedLocs >= Threshold]
+    
+    if (length(SigBins) > 0) {
+      
+      #### Merge Overlapping Significant Bins		
+      SigLocs = as.numeric(names(SigBins))
+      ends = which(diff(SigLocs) >= WindowSize)
+      SigLocs = data.frame(chr = chr, start = SigLocs[c(1, ends + 1)], end = SigLocs[c(ends, length(SigLocs))] + WindowSize - 1)
+      
+      
+      #### Trim Hot Spots so that they start and end on insertion
+      assigned_bins = assign2bins(xx, SigLocs)
+      SigLocs[,2:3] = t(matrix(unlist(by(xx, assigned_bins, range)[rownames(SigLocs)]), nrow = 2))
+      SigLocs$insertions = table(assigned_bins)[rownames(SigLocs)]  # Count insertions per bin
+      rownames(SigLocs) = paste(chr, rownames(SigLocs), sep = '_hs')
+      
+      out = rbind(out, SigLocs)
+      
+    }
+  }
+  
+  return(out)
+}
+
+makeHeatmap = function( chr, start, width = 100000, binsize = 500, maxenr = 500, EffGenomeSize = 2182075994) { #function for making Figure 2 heatmap
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
+  bindata = t(apply(cbind(MuCounts[datasub,]), 2, function(xx) {
+    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
+    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
+    bincounts[is.na(bincounts)] = 0
+    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
+    bincounts
+  }))
+  
+  bindata = sweep(bindata, 1, colSums(MuCounts > 0)*(binsize/EffGenomeSize), '/')  # Scale to fold-enrichment
+  bindata[bindata > maxenr] = maxenr  # Scale everything beyond cutoff so that color palette is not dominated by rare extreme bins (which are mostly from low-depth samples)
+  
+  Heatmap(bindata, col=colorRampPalette(c("grey", "red"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
+}
+
+convert=function(x){
+  lambda=(sum(dat[,i]>0)*100)/EffectiveGenomeSize
+  insertions=x*lambda
+  return(insertions)
+}
+
+
+makeFig1Heatmap = function(chr, start, width = 500, binsize = 1, maxenr = 500, EffGenomeSize = 2182075994) {
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
+  bindata = t(apply(cbind(MuCounts[datasub,c(2:3, 18:19, 24:25, 42:45)]), 2, function(xx) {
+    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
+    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
+    bincounts[is.na(bincounts)] = 0
+    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
+    bincounts
+  }))
+  
+  Heatmap(bindata, col=colorRampPalette(c("grey", "black"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
+}
+
+convert=function(x){
+  lambda=(sum(dat[,i]>0)*100)/EffectiveGenomeSize
+  insertions=x*lambda
+  return(insertions)
+}
+
+
+makeBrowser = function(chr, start, end, width = 10000, EffGenomeSize = 2182075994, WindowSize=500, lengthfudge = 0) {
+  startat = (round((mean(c(start,end)) - width/2)/500)*500) + lengthfudge
+  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= startat) & (Locs[,2] <= (startat + width))))
+  dat=MuCounts
+  dat1=matrix(data=NA, ncol = 4, nrow=nrow(MuCounts))
+  colnames(dat1)=c("Endosperm","Root","Leaf","Pollen")
+  Leaf=rowSums(dat[,grepl("L",colnames(dat))])
+  Root=rowSums(dat[,grepl("R",colnames(dat))])
+  Pollen=rowSums(dat[,grepl("P",colnames(dat))])
+  Endosperm=rowSums(dat[,grepl("E",colnames(dat))])
+  dat1=cbind(Endosperm, Root, Leaf, Pollen)
+  lambda = colSums(dat1 > 0)*WindowSize/EffGenomeSize
+  dat1=dat1[datasub,]
+  dat1=as.data.frame(dat1)
+  position=as.numeric(sub('.+,','',rownames(dat1)))
+  dat1$position = position
+  mat = apply(dat1[,1:4], 2, function(yy) { sapply(startat:(startat+width), function(xx) { sum(abs(dat1$position[yy > 0] - xx) <= WindowSize/2) }) })
+  mat = sweep(mat, 2, lambda, '/')
+  
+  cols=c('#67536cff','#a05a2cff','#73b47cec','#ffd42aff')
+  Tissue=c("Endosperm","Root",'Leaf',"Pollen")
+  par(mfrow=c(4,1))
+  par(mar=c(1.25, 4.1, 0.5, 2.1))
+  for (i in 1:4){
+    bp=barplot(mat[,i], border = NA, space = 0, col = cols[i], xaxs = 'i', ylim = c(0,ceiling(max(mat)/50)*50), axisnames = F, main=Tissue[i], axes = F)
+    axis(1, at=bp[c(1,nrow(bp)),1],labels =NA, tick = T, lwd = .5)
+    axis(2, at=c(0,ceiling(max(mat)/50)*50),tick = T, las = 2, lwd = .5)
+  }
+  #abline(v=bp[start-startat-WindowSize/2,])
+  #abline(v=bp[end-startat + WindowSize/2,])
+  abline(v=bp[start-startat,])
+  abline(v=bp[end-startat,])
+  axis(1, at=c(bp[1,], bp[nrow(bp),]), labels=c(startat, startat+width), lwd=.5)
+}
+
+
+makeHeatmapTop = function(i, width = 40000) {
+  makeHeatmap(HotSpots2[i,1], round(HotSpots2[i,2] - width/2), width)
+}
+#Function for Making Null hotspots for FDR correction
+library(parallel)
+n_cores = 28
+HSnull = mclapply(
+  X = seq_len(n_iter),
+  FUN = function(i) {
+    cat("NULL", i, "\n")
+
+    LocsNULL = Locs_base
+    LocsNULL$position = Locs_base$position +
+      round((runif(nrow(Locs_base)) - 0.5) * 1e6)
+
+    FindHotSpots(LocsNULL)
+  },
+  mc.cores = n_cores
+)
