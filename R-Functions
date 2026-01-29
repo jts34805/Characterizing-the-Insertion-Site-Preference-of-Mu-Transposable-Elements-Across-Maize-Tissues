@@ -320,3 +320,8 @@ HSnull = mclapply(
   },
   mc.cores = n_cores
 )
+
+#adding statistical measurements to hotspots2
+score = function(xx) {
+  -ppois(xx[1] - 1, xx[2]*(nrow(MuCounts)/EffectiveGenomeSize), lower.tail=F, log.p=T)
+}
