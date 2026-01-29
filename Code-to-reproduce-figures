@@ -19,20 +19,8 @@ library(seqLogo)
 
 ###Figure Making Below###
 ##Figure1##
-makeFig1Heatmap = function(chr, start, width = 500, binsize = 1, maxenr = 500, EffGenomeSize = 2182075994) {
-  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
-  bindata = t(apply(cbind(MuCounts[datasub,c(2:3, 18:19, 24:25, 42:45)]), 2, function(xx) {
-    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
-    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
-    bincounts[is.na(bincounts)] = 0
-    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
-    bincounts
-  }))
-  
-  Heatmap(bindata, col=colorRampPalette(c("grey", "black"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
-}
 svg("Figure1B")
-makeFig1Heatmap(chr="chr7", start=13584500)
+makeFig1Heatmap(chr="chr7", start=13584500) #makeFig1Heatmap function is listed in file "R-Functions" in the repository
 dev.off()
 
 #figure 1C
@@ -60,21 +48,8 @@ dev.off()
 
 ##Figure 2##
 #figure 2 main
-makeHeatmap = function( chr, start, width = 100000, binsize = 500, maxenr = 500, EffGenomeSize = 2182075994) {
-  datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
-  bindata = t(apply(cbind(MuCounts[datasub,]), 2, function(xx) {
-    bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
-    bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
-    bincounts[is.na(bincounts)] = 0
-    names(bincounts) = paste(chr, (1:ceiling(width/binsize) - .5)*binsize + start - 1, sep ='_')
-    bincounts
-  }))
-  bindata = sweep(bindata, 1, colSums(MuCounts) > 0*binsize/EffGenomeSize, '/')  # Scale to fold-enrichment
-  bindata[bindata > maxenr] = maxenr  # Scale everything beyond cutoff so that color palette is not dominated by rare extreme bins (which are mostly from low-depth samples)
-  Heatmap(bindata, col=colorRampPalette(c("grey", "red"))(200), name="Fold Enrichment",column_title =paste(chr, start, sep = " "),cluster_columns = F, cluster_rows = F, show_column_dend = F, show_row_dend = F, show_column_names = FALSE)
-}
 svg("Figure2A.svg")
-makeHeatmap(chr='chr7',start=2000000, width=100000) #endosperm enriched hotspot
+makeHeatmap(chr='chr7',start=2000000, width=100000) #makeHeatmap function is from file "R-Functions" in this repository
 dev.off()
 
 #figure 2 top
