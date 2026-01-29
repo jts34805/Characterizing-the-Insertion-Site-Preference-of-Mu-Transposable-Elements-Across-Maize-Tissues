@@ -77,6 +77,26 @@ save(HScpmScaled, file="HScpmScaled.rda")
 
 HSCPMScaledandFiltered = HScpmScaled[rowSums(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] >= 50) >= 3,] #keeps only hotspots that arent zygotic and that have >=50 cpm in 3 samples that have >=10000 cpm 
 
+#group samples by tissue type, run F test to identify hotspots that are have significant differences in the number of insertions contributed to each hotspot by each tissue
+tissue=gsub('.+_',"",colnames(D))
+tissueMeans = matrix(NA, nrow = nrow(D2), ncol = length(unique(tissue)))
+colnames(tissueMeans) = unique(tissue)
+
+for (z in unique(tissue)) { tissueMeans[,z] = rowMeans(D2[,tissue == z]) }
+
+var_exp = rowSums(sweep(sweep(tissueMeans, 1, rowMeans(D2), '-')^2, 2, table(tissue)[colnames(tissueMeans)], '*'))/(ncol(tissueMeans) - 1)
+var_unexp = rowSums((D2 - tissueMeans[,tissue])^2)/(ncol(D2) - ncol(tissueMeans))
+Ft = var_exp/var_unexp
+p.Ft = pf(Ft, ncol(tissueMeans) - 1, ncol(D2) - ncol(tissueMeans), lower.tail = F)
+
+sum(p.adjust(p.Ft,method='BH') <= .01)  # 1558 significantly Tissue associated hotspots
+######COMEBACK HERE AND FILL IN THIS GAP LATER
+
+#trim hotspots 100 bp in size
+HotSpots2 = HotSpots2[HotSpots2$size >= 100,]
+
+
+
 
 
 
