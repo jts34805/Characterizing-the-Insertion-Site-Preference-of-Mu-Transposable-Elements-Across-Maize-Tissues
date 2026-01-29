@@ -108,7 +108,7 @@ lci=as.data.frame(CI[1,])
 uci=as.data.frame(CI[2,])
 #plot the line plot with the 95% CI
 svg("Fig2B_1-21-26.svg")
-ggplot(mean, aes(x=1:nrow(mean),y=colMeans(bootsN2), ymin=lci$`CI[1, ]`,ymax=uci$`CI[2, ]`))+geom_line(colour="black")+theme_classic()+geom_ribbon(aes(colour=NA))+theme_classic()
+ggplot(mean, aes(x=1:nrow(mean),y=colMeans(bootsN2), ymin=lci$`CI[1, ]`,ymax=uci$`CI[2, ]`))+geom_line(colour="black")+theme_classic()
 dev.off()
 
 ##figure 3
