@@ -95,6 +95,47 @@ sum(p.adjust(p.Ft,method='BH') <= .01)  # 1558 significantly Tissue associated h
 #trim hotspots 100 bp in size
 HotSpots2 = HotSpots2[HotSpots2$size >= 100,]
 
+HotSpots2$Score = apply(HotSpots2[,4:5], 1, score)
+
+#this next section was ran on a computing cluster because of the large memory and core needs to generate 1000 null distributions
+library(parallel)
+set.seed(1)
+load("Locs.rda")
+n_cores =28
+Locs_base = Locs[, 1:2]
+n_iter = 1000
+HSnull = vector("list", n_iter)
+
+HSnull = mclapply(
+  X = seq_len(n_iter),
+  FUN = function(i) {
+    cat("NULL", i, "\n")
+
+    LocsNULL = Locs_base
+    LocsNULL$position = Locs_base$position +
+      round((runif(nrow(Locs_base)) - 0.5) * 1e6)
+
+    FindHotSpots(LocsNULL) #FindHotSpots function can be found in "R-Functions" file in this repository
+    },
+  mc.cores = n_cores
+)
+###End of what was run on the computing cluster###
+
+HSnull= HSnull[sapply(HSnull, is.data.frame)]
+HSnull = lapply(HSnull, function(X) {
+  X$size = abs(apply(X[, 2:3], 1, diff)) + 1
+  X
+}) #get hotspot sizes for null distributions
+HSnull = lapply(HSnull, function(X){X$score=apply(X[,4:5], 1, score)}) #calculate "score" for each null hotspot using hotspot size and insertions detected in the hotspot
+HSnullScores = unlist(HSnull)
+
+FDRs = rank(-c(HotSpots2$Score, HSnullScores), ties.method = 'max')[1:nrow(HotSpots2)] #rank all actual and null called hotspots for FDR correction
+FDRs2 = rank(-HotSpots2$Score, ties.method = 'max')
+HotSpots2$FDR = cummax((FDRs - FDRs2)/FDRs2/1000) #calculate FDR
+HotSpots2 = HotSpots2[order(-HotSpots2$Score),] #order hotspots with most significant listed first
+HotSpots2=HotSpots2[HotSpots2$FDR<=0.01,] #Apply FDR cutoff of <= 0.01, resulting in 14022 called hotspots
+save(HotSpots2, file="HotSpots2.rda")
+
 
 
 
