@@ -6,6 +6,7 @@ EffectiveGenomeSize=2182075994 #calculated using genmap, this is the effective g
 ##load in packages
 library(ComplexHeatmap)
 
+
 ##load in R objects
 load("HotSpotsCleanData.rda") #this object was generated from file "Data-processing-1-Read-Filtering-and-Molecule-Counting"
 
@@ -90,7 +91,16 @@ Ft = var_exp/var_unexp
 p.Ft = pf(Ft, ncol(tissueMeans) - 1, ncol(D2) - ncol(tissueMeans), lower.tail = F)
 
 sum(p.adjust(p.Ft,method='BH') <= .01)  # 1558 significantly Tissue associated hotspots
-######COMEBACK HERE AND FILL IN THIS GAP LATER
+###end of F test##
+
+HotSpots$pval_unadj = p.Ft[rownames(HotSpots)] # add tissue specific p value to each respective hotspot
+HotSpots$FDRts = p.adjust(p.Ft, method = 'BH')[rownames(HotSpots)] #calculate tissue specific FDR for each significant hotspot
+mtchs = match(rownames(HotSpots),rownames(D))
+HotSpots$Endosperm_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'E']) - 10) #add fold enrichment measurement for each tissue to each hotspot
+HotSpots$Leaf_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'L']) - 10)
+HotSpots$Pollen_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'P']) - 10)
+HotSpots$Root_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'R']) - 10)
+HotSpots[,8:11] = round(sweep(HotSpots[,8:11], 1, HotSpots[,5], '/')*2182075994/10^6,2) 
 
 #trim hotspots 100 bp in size
 HotSpots2 = HotSpots2[HotSpots2$size >= 100,]
