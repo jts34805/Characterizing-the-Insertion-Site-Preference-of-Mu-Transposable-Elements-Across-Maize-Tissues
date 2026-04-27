@@ -37,23 +37,19 @@ samps = unique(plant[grepl('E', colnames(MuCounts))])
 FindShared = MuCountsCPM[,plant %in% samps]
 plant = plant[plant %in% samps]
 paternals=list()
-historicals = rowMeans(MuCountsCPM[,grepl('MI', colnames(MuCountsCPM))] >= 1000) == 1
 for (s in samps) {
   X2 = FindShared[,plant == s] >= 1000
   X2=as.data.frame(X2)
   if (ncol(X2) == 2) {
-    paternals[[s]] = (rowMeans(X2) == 1) & !historicals}
+    paternals[[s]] = (rowMeans(X2) == 1)}
   
   if (ncol(X2)>2) {
-    paternals[[s]] = X2[,grepl('E', colnames(X2))] & (rowSums(X2[,!grepl('E', colnames(X2))]) >= 1) & !historicals
+    paternals[[s]] = X2[,grepl('E', colnames(X2))] & (rowSums(X2[,!grepl('E', colnames(X2))]) >= 1) 
     
   }
 }
 AllInherited=gsub(".+c","c",names(which(unlist(paternals))>0)) #takes the list made from the above loop and identifies the positions of all inherited insertions across our dataset. 
-MuCounts=MuCounts[!rownames(MuCounts)%in%AllInherited,] #removed 916 unique sites from the matrix that were inherited (>1000 CPM insertions in endo and matched tissue)
-historicals=historicals[historicals>0] #find the true statements for historical insertion sites, as these are the histroical insertion sites
-MuCounts=MuCounts[!rownames(MuCounts)%in%names(historicals),] #remove the rows from MuCounts that are historical, inherited insertions 
-save(MuCounts, file = 'MuCounts.rda')
+##
 
 ##Make Locs object from MuCounts object
 Locs = t(matrix(unlist(strsplit(rownames(MuCounts),':')), nrow = 2))
@@ -62,90 +58,143 @@ Locs1=lapply(Locs1, function(X){round(mean(as.numeric(X)))}) #taking the average
 Locs = data.frame(chr = Locs[,1], position = unlist(Locs1))
 Locs$bin = paste(Locs$chr, round(Locs$pos/2000), sep = ',')
 save(Locs, file="Locs.rda")
+###
 
-#make HotSpots from Locs object, trim and process
-HotSpots = FindHotSpots(Locs)  # Identify Mu hotspots using overall insertion locations
+#make HotSpots from Locs object, calculate size and remove hotspots smaller than 100 bp
+HotSpots = FindHotSpots(Locs[!rownames(MuCounts)%in%AllInherited,])  # Identify Mu hotspots using overall insertion locations
 HotSpots$size = apply(HotSpots[,2:3], 1, diff) + 1 #add size of hotspot column to dataframe
+HotSpots=HotSpots[HotSpots$size>=100,]
 
-##add tissue information to initial called hotspots
+#FDR correct the initial called hotspots
+#Nulls was generated using script "HSNulls_Array.R"
+score = function(xx) {
+  -ppois(xx[1] - 1, xx[2]*(nrow(Locs)/EffectiveGenomeSize), lower.tail=F, log.p=T)
+}
+HotSpots$Score = apply(HotSpots[,4:5], 1, score)
+load("HotSpotNULL_ALL.rda")
+all_nulls = lapply(all_nulls, function(X) {
+  X$size = abs(apply(X[, 2:3], 1, diff)) + 1
+  X
+}) #get hotspot sizes for null distributions
+all_nulls_scores = unlist(lapply(all_nulls, function(X){X$score=apply(X[,4:5], 1, score)})) #calculate "score" for each null hotspot using hotspot size and insertions detected in the hotspot
+
+# Order by decreasing score first
+HotSpots = HotSpots[order(-HotSpots$Score), ]
+# Recompute ranks after ordering
+FDRs = rank(-c(HotSpots$Score, all_nulls_scores), ties.method = 'max')[1:nrow(HotSpots)]
+FDRs2 = rank(-HotSpots$Score, ties.method = 'max')
+rawFDR = (FDRs - FDRs2) / FDRs2 / 1000 # Empirical FDR
+HotSpots$FDR = cummax(rawFDR)
+HotSpots = HotSpots[HotSpots$FDR <= 0.01, ]# Apply cutoff
+save(HotSpots, file="HotSpots.rda") #this is a dataframe now containing FDR corrected hotspots >100 bp in size
+
+##add tissue information to initial called hotspots #Fig 3#
 HScounts = matrix2bincounts(MuCounts) #count the number of insertions detected from each sample for each hotspot
+save(HScounts, file="HScounts.rda")
 zygotics = matrix2bincounts(MuCounts >= 500)  # Identifies which hotspots have insertions contributed to by early, abundant Mu insertions
 zygotics = which(rowSums(zygotics[-1,]) > 0) #identifies hotspots that are contributed to by early Mu insertions, which add unwanted signal for samples from the same individual
+save(zygotics, file="zygotics.rda")
 HScpm = sweep(HScounts[-1,], 2, colSums(HScounts), '/')*10^6  # Scale hotspot counts to insertions per million
 HScpmScaled = log(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] + 10)  #Remove hotspots that contain any zygotic insertions (they are dominated by lineage signal) require at least 10K insertions in a sample, then log transform after adding a pseudocount of 10
 save(HScpmScaled, file="HScpmScaled.rda")
 
 
-HSCPMScaledandFiltered = HScpmScaled[rowSums(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] >= 50) >= 3,] #keeps only hotspots that arent zygotic and that have >=50 cpm in 3 samples that have >=10000 cpm 
+HScpmScaledandFiltered = HScpmScaled[rowSums(HScpm[-zygotics,colSums(HScounts[-1,]) >= 10000] >= 50) >= 3,] #keeps only hotspots that arent zygotic and that have >=50 cpm in 3 samples that have >=10000 cpm 
 
 #group samples by tissue type, run F test to identify hotspots that are have significant differences in the number of insertions contributed to each hotspot by each tissue
-tissue=gsub('.+_',"",colnames(D))
-tissueMeans = matrix(NA, nrow = nrow(D2), ncol = length(unique(tissue)))
+tissue=gsub('.+_',"",colnames(HScpmScaled))
+tissueMeans = matrix(NA, nrow = nrow(HScpmScaledandFiltered), ncol = length(unique(tissue)))
 colnames(tissueMeans) = unique(tissue)
 
-for (z in unique(tissue)) { tissueMeans[,z] = rowMeans(D2[,tissue == z]) }
+for (z in unique(tissue)) { tissueMeans[,z] = rowMeans(HScpmScaledandFiltered[,tissue == z]) }
 
-var_exp = rowSums(sweep(sweep(tissueMeans, 1, rowMeans(D2), '-')^2, 2, table(tissue)[colnames(tissueMeans)], '*'))/(ncol(tissueMeans) - 1)
-var_unexp = rowSums((D2 - tissueMeans[,tissue])^2)/(ncol(D2) - ncol(tissueMeans))
+var_exp = rowSums(sweep(sweep(tissueMeans, 1, rowMeans(HScpmScaledandFiltered), '-')^2, 2, table(tissue)[colnames(tissueMeans)], '*'))/(ncol(tissueMeans) - 1)
+var_unexp = rowSums((HScpmScaledandFiltered - tissueMeans[,tissue])^2)/(ncol(HScpmScaledandFiltered) - ncol(tissueMeans))
 Ft = var_exp/var_unexp
-p.Ft = pf(Ft, ncol(tissueMeans) - 1, ncol(D2) - ncol(tissueMeans), lower.tail = F)
+p.Ft = pf(Ft, ncol(tissueMeans) - 1, ncol(HScpmScaledandFiltered) - ncol(tissueMeans), lower.tail = F)
 
 sum(p.adjust(p.Ft,method='BH') <= .01)  # 1558 significantly Tissue associated hotspots
 ###end of F test##
 
+
+
 HotSpots$pval_unadj = p.Ft[rownames(HotSpots)] # add tissue specific p value to each respective hotspot
 HotSpots$FDRts = p.adjust(p.Ft, method = 'BH')[rownames(HotSpots)] #calculate tissue specific FDR for each significant hotspot
-mtchs = match(rownames(HotSpots),rownames(D))
-HotSpots$Endosperm_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'E']) - 10) #add fold enrichment measurement for each tissue to each hotspot
-HotSpots$Leaf_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'L']) - 10)
-HotSpots$Pollen_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'P']) - 10)
-HotSpots$Root_FoldEnrichment = rowMeans(exp(D[mtchs,tissue == 'R']) - 10)
-HotSpots[,8:11] = round(sweep(HotSpots[,8:11], 1, HotSpots[,5], '/')*2182075994/10^6,2) 
+mtchs = match(rownames(HotSpots),rownames(HScpmScaled))
+HotSpots$Endosperm_FoldEnrichment = rowMeans(exp(HScpmScaled[mtchs,tissue == 'E']) - 10) #add fold enrichment measurement for each tissue to each hotspot
+HotSpots$Leaf_FoldEnrichment = rowMeans(exp(HScpmScaled[mtchs,tissue == 'L']) - 10)
+HotSpots$Pollen_FoldEnrichment = rowMeans(exp(HScpmScaled[mtchs,tissue == 'P']) - 10)
+HotSpots$Root_FoldEnrichment = rowMeans(exp(HScpmScaled[mtchs,tissue == 'R']) - 10)
+HotSpots[,10:13] = round(sweep(HotSpots[,10:13], 1, HotSpots[,5], '/')*2182075994/10^6,2) #get to fold enrichment after acounting for per million normalization
 
-#trim hotspots 100 bp in size
-HotSpots2 = HotSpots2[HotSpots2$size >= 100,]
 
-HotSpots2$Score = apply(HotSpots2[,4:5], 1, score)
+###Adding Gene information to hotspots
+##Making HotSpotGRanges object
+library(GenomicRanges)
+library(rtracklayer)
 
-#this next section was ran on a computing cluster because of the large memory and core needs to generate 1000 null distributions
-library(parallel)
-set.seed(1)
-load("Locs.rda")
-n_cores =28
-Locs_base = Locs[, 1:2]
-n_iter = 1000
-HSnull = vector("list", n_iter)
+##make GRanges object to compare to B73 annotations in R
+HotSpotsRanges=IRanges(start=HotSpots$start,
+                      end = HotSpots$end,
+                      width = HotSpots$size, 
+                      names = rownames(HotSpots))
 
-HSnull = mclapply(
-  X = seq_len(n_iter),
-  FUN = function(i) {
-    cat("NULL", i, "\n")
+HotSpotsGRanges=GRanges(seqnames = HotSpots$chr,
+                       ranges = HotSpotsRanges, 
+                       rep("*", length(HotSpots$chr)),
+                       EndospermFoldEnrichment=HotSpots$Endosperm_FoldEnrichment, 
+                       LeafFoldEnrichment=HotSpots$Leaf_FoldEnrichment, 
+                       PollenFoldEnrichment=HotSpots$Pollen_FoldEnrichment, 
+                       RootFoldEnrichment=HotSpots$Root_FoldEnrichment, 
+                       HotspotID=rownames(HotSpots))
 
-    LocsNULL = Locs_base
-    LocsNULL$position = Locs_base$position +
-      round((runif(nrow(Locs_base)) - 0.5) * 1e6)
-
-    FindHotSpots(LocsNULL) #FindHotSpots function can be found in "R-Functions" file in this repository
-    },
-  mc.cores = n_cores
+###get genes and coordinates to convert between hotspots and genes
+B73Genome=import("~/Desktop/Coding/Genomes/Zm-B73-REFERENCE-NAM-5.0_Zm00001eb.1.gff3.gz")
+B73Genes=B73Genome[B73Genome$type=="gene"]
+#make hits object, add gene IDs to hotspotsgranges object
+hits <- findOverlaps(HotSpotsGRanges, B73Genes, type="any")
+gene_list <- split(
+  B73Genes$ID[subjectHits(hits)],
+  queryHits(hits)
 )
-###End of what was run on the computing cluster###
 
-HSnull= HSnull[sapply(HSnull, is.data.frame)]
-HSnull = lapply(HSnull, function(X) {
-  X$size = abs(apply(X[, 2:3], 1, diff)) + 1
-  X
-}) #get hotspot sizes for null distributions
-HSnull = lapply(HSnull, function(X){X$score=apply(X[,4:5], 1, score)}) #calculate "score" for each null hotspot using hotspot size and insertions detected in the hotspot
-HSnullScores = unlist(HSnull)
+collapsed <- sapply(gene_list, paste, collapse = ",")
+HotSpotsGRanges$GeneIDs <- NA
+HotSpotsGRanges$GeneIDs[as.integer(names(collapsed))] <- collapsed
+##Add gene ids to HotSpots dataframe
+HotSpots$GeneIDs= sapply(HotSpotsGRanges$GeneIDs, paste, collapse = ",")
 
-FDRs = rank(-c(HotSpots2$Score, HSnullScores), ties.method = 'max')[1:nrow(HotSpots2)] #rank all actual and null called hotspots for FDR correction
-FDRs2 = rank(-HotSpots2$Score, ties.method = 'max')
-HotSpots2$FDR = cummax((FDRs - FDRs2)/FDRs2/1000) #calculate FDR
-HotSpots2 = HotSpots2[order(-HotSpots2$Score),] #order hotspots with most significant listed first
-HotSpots2=HotSpots2[HotSpots2$FDR<=0.01,] #Apply FDR cutoff of <= 0.01, resulting in 14022 called hotspots
-save(HotSpots2, file="HotSpots2.rda")
+#add gene names as well as GeneIDs to hotspots
+hsgenes <- unique(unlist(strsplit(HotSpots$GeneIDs, ",")))
+mart <- useMart(
+  "plants_mart",
+  dataset = "zmays_eg_gene",
+  host = "https://plants.ensembl.org"
+)
 
+annot <- getBM(
+  attributes = c("ensembl_gene_id",
+                 "external_gene_name",
+                 "description"),
+  filters = "ensembl_gene_id",
+  values = hsgenes,
+  mart = mart
+)
+gene_map <- annot$external_gene_name
+names(gene_map) <- annot$ensembl_gene_id
+
+gene_map[gene_map == ""] <- names(gene_map)[gene_map == ""]
+
+HotSpots$GeneNames <- sapply(
+  strsplit(HotSpots$GeneIDs, ","),
+  function(g) {
+    names <- gene_map[g]
+    names <- names[names != g]      # remove entries where name == gene ID
+    if(length(names) == 0) NA       # if none have names
+    else paste(names, collapse = ",")
+  }
+)
+save(HotSpots, file= "HotSpots.rda")
 
 
 
