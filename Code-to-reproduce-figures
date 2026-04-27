@@ -3,7 +3,7 @@
 
 load("MuCounts.rda")
 load("Locs.rda")
-load("Hotspots2.rda")
+load("Hotspots.rda")
 load("HScounts.rda")
 load("zygotics.rda")
 load("Maize Tissue Atlas _ remappedV5-1.rda")
