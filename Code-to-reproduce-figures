@@ -239,7 +239,7 @@ dev.off()
 
 #broad other endo
 svg("EndoEnrichedBroadNotEndoExpressed.svg")
-makeBrowser("chr3",173440692,173444416,width = 10000)
+makeBrowser("chr3",173440692,173444416,width = 10000) #makeBrowser function can be found in file "R-Functions" in this repository
 dev.off()
 #par(mar = c(10, 4, 4, 2))  # bottom, left, top, right
 
