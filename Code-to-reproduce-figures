@@ -52,15 +52,15 @@ svg("Figure2A.svg")
 makeHeatmap(chr='chr7',start=2000000, width=100000) #makeHeatmap function is from file "R-Functions" in this repository
 dev.off()
 
-#figure 2 top
+#figure 2 bottom
 start=2000000
 width=100000
 chr="chr7"
 binsize=500
 EffGenomeSize = 2182075994
 maxenr=500
-datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width))))
-bindataUn = t(apply(MuCounts, 2, function(xx) {
+datasub = which((Locs[,1] == chr) & ((Locs[,2] >= start) & (Locs[,2] < (start + width)))) #subset Locs object to be positions on the correct chromosome, between the start and start + width
+bindataUn = t(apply(MuCounts, 2, function(xx) { #count Mu insertion sites with a rolling window across the region
   bins = ceiling((Locs[datasub,2][xx > 0] - start + 1)/binsize)
   bincounts = table(bins)[as.character(1:ceiling(width/binsize))]
   bincounts[is.na(bincounts)] = 0
@@ -82,7 +82,7 @@ CI=apply(bootsN2, 2, quantile, p = c(.025,.975))  # CI95
 lci=as.data.frame(CI[1,])
 uci=as.data.frame(CI[2,])
 #plot the line plot with the 95% CI
-svg("Fig2B_1-21-26.svg")
+svg("Fig2Bottom.svg")
 ggplot(mean, aes(x=1:nrow(mean),y=colMeans(bootsN2), ymin=lci$`CI[1, ]`,ymax=uci$`CI[2, ]`))+geom_line(colour="black")+theme_classic()
 dev.off()
 
@@ -179,9 +179,81 @@ dev.off()
 makeBrowser(chr='chr3',start =163836402, end = 163832719, width = 10000, WindowSize = 1000 ) #Strong pollen depleted
 
 ##Figure 4
+#Get tissue-associated hotspots that overlap genes, calculate fold diff between max fold enrichment and second highest fold enrichment
+TAHotSpots=HotSpots[!is.na(HotSpots$FDRts)&HotSpots$FDRts<=0.01,]
 
+TAHotSpots$max=apply(TAHotSpots[,10:13], 1, max)
+TAHotSpots$second=apply(TAHotSpots[,10:13], 1, function(xx) { xx[order(-xx)][2] })
+TAHotSpots$folddiff=apply(TAHotSpots[,16:17],1,function(xx){xx[1]/xx[2]})
 
+TAHotSpots=TAHotSpots[TAHotSpots$folddiff>=3,]
+TAHotSpots=TAHotSpots[order(TAHotSpots$folddiff, decreasing=T),]
+GeneTAHotSpots=TAHotSpots[TAHotSpots$GeneIDs!="NA",]
 
+tsHotSpots=as_tibble(TAHotSpots[TAHotSpots$folddiff>=2, ]) #get the genes overlapping TA hotspots
+MuFEGenes <- tsHotSpots %>% 
+  dplyr::select(GeneIDs,
+         Endosperm_FoldEnrichment,
+         Leaf_FoldEnrichment,
+         Pollen_FoldEnrichment,
+         Root_FoldEnrichment) %>%
+  separate_rows(GeneIDs, sep = ",")
+MuFEGenes=as.data.frame(MuFEGenes)
+
+load("Maize Tissue Atlas _ remappedV5-1.rda") ##loading packages and data set
+
+Genes=A ##subsetting tisue atlas
+Genes=Genes[,order(colnames(Genes))]
+Genes=Genes[,c(16:18,27:29,36:38,49:51,81:83,90:106,110:116,123:125)]
+Genes=sweep(Genes, 2, colSums(Genes),"/")*10^6 #scale tissue atlas to rpm
+Genes=Genes[rownames(Genes)%in%MuFEGenes[,1],] #only take genes that are overlapping hotspot genes
+
+MuFEGenes=MuFEGenes[MuFEGenes$GeneIDs%in%rownames(Genes),]#only take genes that are in the tissue atlas data
+MuFEGenes=na.omit(MuFEGenes)
+
+###because some genes are overlapped by multiple hotspots, I need to address the same hotspot being mapped to multiple genes to compare to expression data. Here, using max FE across the different hotspots
+GeneLevel_maxFE <- MuFEGenes %>%
+  group_by(GeneIDs) %>%
+  summarise(
+    Endosperm_FoldEnrichment = max(Endosperm_FoldEnrichment, na.rm = TRUE),
+    Leaf_FoldEnrichment      = max(Leaf_FoldEnrichment, na.rm = TRUE),
+    Pollen_FoldEnrichment    = max(Pollen_FoldEnrichment, na.rm = TRUE),
+    Root_FoldEnrichment      = max(Root_FoldEnrichment, na.rm = TRUE)
+  )
+GeneLevel_maxFE=as.data.frame(GeneLevel_maxFE)
+rownames(GeneLevel_maxFE)=GeneLevel_maxFE$GeneIDs
+GeneLevel_maxFE=GeneLevel_maxFE[,2:5]
+
+#only keep genes that are significantly tissue specific
+Genes=Genes[rownames(Genes)%in%rownames(GeneLevel_maxFE),]
+common_genes <- intersect(rownames(Genes), rownames(GeneLevel_maxFE))
+
+Genes <- Genes[common_genes, ]
+GeneLevel_maxFE <- GeneLevel_maxFE[common_genes, ]
+
+svg("Figure4A.svg")
+Heatmap(cor(log(GeneLevel_maxFE+1),log(Genes+1)),column_order = c(1:12,23:25,16:22,37:39,30:36,13:15,26:29,40:42),row_order=c(1,4,2,3),col = colorRampPalette(c('#0571B0','#92C5DE','#F7F7F7','#F4A582','#CA0020'))(100))
+dev.off()
+
+###Figures 4B-G
+
+#broad other endo
+svg("EndoEnrichedBroadNotEndoExpressed.svg")
+makeBrowser("chr3",173440692,173444416,width = 10000)
+dev.off()
+#par(mar = c(10, 4, 4, 2))  # bottom, left, top, right
+
+vals <- as.vector(as.numeric(Genes_pooled["Zm00001eb144960",])) #not zscore
+svg("EndoEnrichedBroadNotEndoExpressedBarPlot.svg")
+barplot(
+  vals,
+  names.arg = colnames(Genes_pooled),
+  las = 2,
+  cex.names = 0.5,
+  col = c(rep("#67536cff",4),"#a05a2cff",rep('#73b47cec',2),rep('#ffd42aff',3),rep("darkgreen",2)),
+  ylab = "RPM"
+)
+dev.off()
 
 
 
